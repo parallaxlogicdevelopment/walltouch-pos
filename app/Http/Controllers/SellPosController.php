@@ -399,6 +399,9 @@ class SellPosController extends Controller
                 //Customer group details
                 $contact_id = $request->get('contact_id', null);
                 $cg = $this->contactUtil->getCustomerGroup($business_id, $contact_id);
+                $ci = $this->contactUtil->getContactInfo($business_id, $contact_id);
+                $business_details = $this->businessUtil->getDetails($business_id);
+
                 $input['customer_group_id'] = (empty($cg) || empty($cg->id)) ? null : $cg->id;
 
                 //set selling price group id
@@ -565,7 +568,7 @@ class SellPosController extends Controller
                     //Allocate the quantity from purchase and add mapping of
                     //purchase & sell lines in
                     //transaction_sell_lines_purchase_lines table
-                    $business_details = $this->businessUtil->getDetails($business_id);
+                    //$business_details = $this->businessUtil->getDetails($business_id);
                     $pos_settings = empty($business_details->pos_settings) ? $this->businessUtil->defaultPosSettings() : json_decode($business_details->pos_settings, true);
 
                     $business = ['id' => $business_id,
@@ -590,6 +593,21 @@ class SellPosController extends Controller
                 $this->transactionUtil->activityLog($transaction, 'added');
 
                 DB::commit();
+
+
+                // Send SMS notification if customer has mobile number
+                if (!empty($ci['mobile'])) {
+                    try {
+                        $data = [];
+                        $data['sms_settings'] = $business_details->sms_settings ?? [];
+                        $data['mobile_number'] = $ci['mobile'];
+                        $data['sms_body'] = 'Thanks for choosing WALL TOUCH! Your buy successfully done. Pls contact Our Support for further help 01712968571, 01919986824';
+                        $this->notificationUtil->sendSms($data);
+                    } catch (\Exception $e) {
+                        // Log SMS errors but don't stop transaction processing
+                        \Log::emergency('SMS error in store method: ' . $e->getMessage());
+                    }
+                }
 
                 SellCreatedOrModified::dispatch($transaction);
 
