@@ -628,6 +628,28 @@ class ContactController extends Controller
             DB::beginTransaction();
             $output = $this->contactUtil->createNewContact($input);
 
+            // Send welcome SMS to the new contact if mobile number is provided
+            if ($output['success'] && !empty($input['mobile'])) {
+                try {
+                    // Get business details for SMS settings
+                    $business = Business::find($business_id);
+
+                    $sms_data = [];
+                    $sms_data['sms_settings'] = $business->sms_settings ?? [];
+                    $sms_data['mobile_number'] = $input['mobile'];
+
+                    // Welcome message with customer name and Bengali text
+                    $customer_name = $input['name'] ?? '';
+                    $sms_data['sms_body'] = "Welcome {$customer_name}! আপনি এখন আমাদের সিস্টেমে যুক্ত হয়েছেন। আন্তরিক ধন্যবাদ আমাদের সাথে থাকার জন্য। – WALL TOUCH, Hotline: 01712968571";
+
+                    // Send SMS using NotificationUtil
+                    $this->notificationUtil->sendSms($sms_data);
+                } catch (\Exception $e) {
+                    // Log SMS errors but don't stop contact creation process
+                    \Log::emergency('SMS error in contact creation: ' . $e->getMessage());
+                }
+            }
+
             $this->moduleUtil->getModuleData('after_contact_saved', ['contact' => $output['data'], 'input' => $request->input()]);
 
             $this->contactUtil->activityLog($output['data'], 'added');
