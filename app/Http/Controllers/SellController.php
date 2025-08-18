@@ -20,6 +20,7 @@ use App\Utils\BusinessUtil;
 use App\Utils\ContactUtil;
 use App\Utils\ModuleUtil;
 use App\Utils\ProductUtil;
+use App\Utils\SendsSms;
 use App\Utils\TransactionUtil;
 use App\Warranty;
 use DB;
@@ -30,6 +31,8 @@ use Yajra\DataTables\Facades\DataTables;
 
 class SellController extends Controller
 {
+    use SendsSms;
+
     /**
      * All Utils instance.
      */
@@ -1566,6 +1569,7 @@ class SellController extends Controller
             $business_id = $request->session()->get('user.business_id');
 
             $transaction = Transaction::where('business_id', $business_id)
+                                ->with('contact')
                                 ->findOrFail($id);
 
             $transaction_before = $transaction->replicate();
@@ -1574,6 +1578,10 @@ class SellController extends Controller
 
             $activity_property = ['update_note' => $request->input('shipping_note', '')];
             $this->transactionUtil->activityLog($transaction, 'shipping_edited', $transaction_before, $activity_property);
+
+            // Send shipping SMS notification (non-blocking)
+            $business = Business::find($business_id);
+            $this->sendShippingSms($transaction, $business);
 
             $output = ['success' => 1,
                 'msg' => trans('lang_v1.updated_success'),
@@ -1655,5 +1663,54 @@ class SellController extends Controller
 
         echo 'Mapping reset success';
         exit;
+    }
+
+    /**
+     * Send shipping SMS to customer
+     */
+    private function sendShippingSms($transaction, $business)
+    {
+        try {
+            if (empty($transaction->contact->mobile) || !$this->isSmsConfigured($business->id)) {
+                return;
+            }
+
+            // Prepare shipping information for SMS
+            $shipping_info = [];
+            
+            if (!empty($transaction->shipping_details)) {
+                $shipping_info[] = $transaction->shipping_details;
+            }
+            
+            if (!empty($transaction->shipping_address)) {
+                $shipping_info[] = $transaction->shipping_address;
+            }
+            
+            if (!empty($transaction->shipping_status)) {
+                $shipping_info[] = "Status: " . $transaction->shipping_status;
+            }
+            
+            if (!empty($transaction->delivered_to)) {
+                $shipping_info[] = "Delivered to: " . $transaction->delivered_to;
+            }
+
+            // Add custom shipping fields if they exist
+            for ($i = 1; $i <= 5; $i++) {
+                $field = "shipping_custom_field_{$i}";
+                if (!empty($transaction->$field)) {
+                    $shipping_info[] = $transaction->$field;
+                }
+            }
+
+            $shipping_details = !empty($shipping_info) ? implode(' | ', $shipping_info) : 'Updated';
+
+            // Format the SMS message as requested
+            $message = "আপনার পণ্য পাঠানো হয়েছে। Shipping Details: {$shipping_details} | – WALL TOUCH, Hotline: 01712968571";
+
+            $this->sendSms($transaction->contact->mobile, $message, $business->id);
+        } catch (\Exception $e) {
+            // Log error but don't block the shipping update
+            \Log::error('Shipping SMS failed: ' . $e->getMessage());
+        }
     }
 }
