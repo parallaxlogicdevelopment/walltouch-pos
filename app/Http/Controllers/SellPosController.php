@@ -52,6 +52,7 @@ use App\Utils\ModuleUtil;
 use App\Utils\NotificationUtil;
 use App\Utils\ProductUtil;
 use App\Utils\TransactionUtil;
+use App\Traits\SendsSms;
 use App\Variation;
 use App\Warranty;
 use Illuminate\Http\Request;
@@ -66,6 +67,8 @@ use App\Events\SellCreatedOrModified;
 
 class SellPosController extends Controller
 {
+    use SendsSms;
+    
     /**
      * All Utils instance.
      */
@@ -399,6 +402,9 @@ class SellPosController extends Controller
                 //Customer group details
                 $contact_id = $request->get('contact_id', null);
                 $cg = $this->contactUtil->getCustomerGroup($business_id, $contact_id);
+                $ci = $this->contactUtil->getContactInfo($business_id, $contact_id);
+                $business_details = $this->businessUtil->getDetails($business_id);
+
                 $input['customer_group_id'] = (empty($cg) || empty($cg->id)) ? null : $cg->id;
 
                 //set selling price group id
@@ -565,7 +571,7 @@ class SellPosController extends Controller
                     //Allocate the quantity from purchase and add mapping of
                     //purchase & sell lines in
                     //transaction_sell_lines_purchase_lines table
-                    $business_details = $this->businessUtil->getDetails($business_id);
+                    //$business_details = $this->businessUtil->getDetails($business_id);
                     $pos_settings = empty($business_details->pos_settings) ? $this->businessUtil->defaultPosSettings() : json_decode($business_details->pos_settings, true);
 
                     $business = ['id' => $business_id,
@@ -590,6 +596,16 @@ class SellPosController extends Controller
                 $this->transactionUtil->activityLog($transaction, 'added');
 
                 DB::commit();
+
+                // Send SMS notification if customer has mobile number (non-blocking)
+                if (!empty($ci['mobile'])) {
+                    try {
+                        $this->sendSaleInvoiceSms($transaction, $business);
+                    } catch (\Exception $e) {
+                        // Log SMS errors but don't stop transaction processing
+                        \Log::emergency('SMS error in store method: ' . $e->getMessage());
+                    }
+                }
 
                 SellCreatedOrModified::dispatch($transaction);
 
@@ -3081,5 +3097,34 @@ class SellPosController extends Controller
                             ->update(['paused_at' => null, 'available_at' => null]);
 
         return ['success' => true];
+    }
+
+    /**
+     * Send sale invoice SMS to customer
+     */
+    private function sendSaleInvoiceSms($transaction, $business)
+    {
+        try {
+            if (empty($transaction->contact->mobile) || !$this->isSmsConfigured($business->id)) {
+                return;
+            }
+
+            // Get previous due (total due - current transaction due)
+            $current_due = $transaction->final_total - $transaction->total_paid;
+            $total_due = $transaction->contact->getTotalDue($business->id);
+            $previous_due = $total_due - $current_due;
+
+            // Format the SMS message
+            $message = "Invoice#{$transaction->invoice_no} | " .
+                      "Bill: ৳" . number_format($transaction->final_total, 2) . " | " .
+                      "Prev Due: ৳" . number_format($previous_due, 2) . " | " .
+                      "Outstanding: ৳" . number_format($total_due, 2) . " | " .
+                      "অর্ডারের জন্য আন্তরিক ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
+
+            $this->sendSms($transaction->contact->mobile, $message, $business->id);
+        } catch (\Exception $e) {
+            // Log error but don't block the transaction
+            \Log::error('Sale invoice SMS failed: ' . $e->getMessage());
+        }
     }
 }

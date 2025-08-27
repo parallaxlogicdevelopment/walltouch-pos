@@ -16,6 +16,7 @@ use App\Utils\ModuleUtil;
 use App\Utils\NotificationUtil;
 use App\Utils\TransactionUtil;
 use App\Utils\Util;
+use App\Traits\SendsSms;
 use DB;
 use Excel;
 use Illuminate\Http\Request;
@@ -24,6 +25,7 @@ use Yajra\DataTables\Facades\DataTables;
 
 class ContactController extends Controller
 {
+    use SendsSms;
     protected $commonUtil;
 
     protected $contactUtil;
@@ -627,6 +629,30 @@ class ContactController extends Controller
 
             DB::beginTransaction();
             $output = $this->contactUtil->createNewContact($input);
+
+            // Send welcome SMS to the new contact if mobile number is provided
+            if ($output['success'] && !empty($input['mobile'])) {
+                try {
+                    $contact_name = $input['name'] ?? '';
+                    $contact_type = $input['type'] ?? 'customer';
+                    
+                    // Send different SMS messages based on contact type using optimized SMS service
+                    if ($contact_type == 'supplier') {
+                        // Supplier welcome message
+                        $this->sendSupplierWelcomeSms($contact_name, $input['mobile']);
+                    } elseif ($contact_type == 'customer') {
+                        // Customer welcome message  
+                        $this->sendWelcomeSms($contact_name, $input['mobile']);
+                    } elseif ($contact_type == 'both') {
+                        // Both customer and supplier
+                        $message = "Dear {$contact_name}, আপনি আমাদের সিস্টেমে Customer ও Supplier হিসেবে যুক্ত হয়েছেন। সহযোগিতার জন্য ধন্যবাদ। – WALL TOUCH, Hotline: 01712968571";
+                        $this->sendSms($input['mobile'], $message);
+                    }
+                } catch (\Exception $e) {
+                    // Log SMS errors but don't stop contact creation process
+                    \Log::emergency('SMS error in contact creation: ' . $e->getMessage());
+                }
+            }
 
             $this->moduleUtil->getModuleData('after_contact_saved', ['contact' => $output['data'], 'input' => $request->input()]);
 

@@ -10,12 +10,14 @@ use App\Transaction;
 use App\TransactionPayment;
 use App\Utils\ModuleUtil;
 use App\Utils\TransactionUtil;
+use App\Traits\SendsSms;
 use Datatables;
 use DB;
 use Illuminate\Http\Request;
 
 class TransactionPaymentController extends Controller
 {
+    use SendsSms;
     protected $transactionUtil;
 
     protected $moduleUtil;
@@ -125,6 +127,16 @@ class TransactionPaymentController extends Controller
 
                     $inputs['transaction_type'] = $transaction->type;
                     event(new TransactionPaymentAdded($tp, $inputs));
+
+                    // Send SMS notification for payment (non-blocking)
+                    try {
+                        if ($transaction->contact && !empty($transaction->contact->mobile)) {
+                            $this->sendPaymentSms($transaction, $tp);
+                        }
+                    } catch (\Exception $e) {
+                        // Log SMS errors but don't stop payment process
+                        \Log::emergency('SMS error in payment: ' . $e->getMessage());
+                    }
                 }
 
                 //update payment status
@@ -569,6 +581,20 @@ class TransactionPaymentController extends Controller
             }
 
             DB::commit();
+
+            // Send SMS notification for payment (non-blocking)
+            try {
+                if ($tp && $tp->payment_for) {
+                    $contact = Contact::find($tp->payment_for);
+                    if ($contact && !empty($contact->mobile)) {
+                        $this->sendContactPaymentSms($contact, $tp);
+                    }
+                }
+            } catch (\Exception $e) {
+                // Log SMS errors but don't stop payment process
+                \Log::emergency('SMS error in contact payment: ' . $e->getMessage());
+            }
+
             $output = ['success' => true,
                 'msg' => __('purchase.payment_added_success'),
             ];
@@ -735,6 +761,83 @@ class TransactionPaymentController extends Controller
                     ><i class="fa fa-trash" aria-hidden="true"></i> @lang("messages.delete")</button> @if(!empty($document))<a href="{{asset("/uploads/documents/" . $document)}}" class="btn btn-success btn-xs" download=""><i class="fa fa-download"></i> @lang("purchase.download_document")</a>@endif')
                 ->rawColumns(['amount', 'method', 'action'])
                 ->make(true);
+        }
+    }
+
+    /**
+     * Send SMS notification for payment
+     */
+    private function sendPaymentSms($transaction, $payment)
+    {
+        try {
+            if (!$transaction->contact || empty($transaction->contact->mobile)) {
+                return;
+            }
+
+            // Get current total due amount
+            $total_due = $this->transactionUtil->getContactDue($transaction->contact_id, $transaction->business_id);
+            
+            // Get payment method name
+            $payment_types = $this->transactionUtil->payment_types(null, false, $transaction->business_id);
+            $payment_method = $payment_types[$payment->method] ?? $payment->method;
+            
+            // Format payment amount
+            $amount = $this->transactionUtil->num_f($payment->amount, true);
+            $total_due_formatted = $this->transactionUtil->num_f($total_due, true);
+            
+            // Get cheque number if payment method is cheque
+            $cheque_info = '';
+            if ($payment->method == 'cheque' && !empty($payment->cheque_number)) {
+                $cheque_info = " | Cheque: {$payment->cheque_number}";
+            }
+            
+            // Build SMS message
+            $contact_name = $transaction->contact->name ?? '';
+            $message = "Paid: ৳{$amount} via {$payment_method}{$cheque_info} | Current Due: ৳{$total_due_formatted} | পেমেন্ট প্রদান করা হয়েছে – WALL TOUCH, Hotline: 01712968571";
+            
+            // Send SMS
+            $this->sendSms($transaction->contact->mobile, $message);
+            
+        } catch (\Exception $e) {
+            \Log::emergency('Payment SMS error: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Send SMS notification for direct contact payment
+     */
+    private function sendContactPaymentSms($contact, $payment)
+    {
+        try {
+            if (!$contact || empty($contact->mobile)) {
+                return;
+            }
+
+            // Get current total due amount
+            $total_due = $this->transactionUtil->getContactDue($contact->id, $payment->business_id);
+            
+            // Get payment method name
+            $payment_types = $this->transactionUtil->payment_types(null, false, $payment->business_id);
+            $payment_method = $payment_types[$payment->method] ?? $payment->method;
+            
+            // Format payment amount
+            $amount = $this->transactionUtil->num_f($payment->amount, true);
+            $total_due_formatted = $this->transactionUtil->num_f($total_due, true);
+            
+            // Get cheque number if payment method is cheque
+            $cheque_info = '';
+            if ($payment->method == 'cheque' && !empty($payment->cheque_number)) {
+                $cheque_info = " | Cheque: {$payment->cheque_number}";
+            }
+            
+            // Build SMS message
+            $message = "Paid: ৳{$amount} via {$payment_method}{$cheque_info} | Current Due: ৳{$total_due_formatted} | পেমেন্ট প্রদান করা হয়েছে – WALL TOUCH, Hotline: 01712968571";
+            
+            // Send SMS
+            $this->sendSms($contact->mobile, $message);
+            
+        } catch (\Exception $e) {
+            \Log::emergency('Contact Payment SMS error: ' . $e->getMessage());
         }
     }
 }
