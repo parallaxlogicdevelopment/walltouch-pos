@@ -20,7 +20,7 @@ use App\Utils\BusinessUtil;
 use App\Utils\ContactUtil;
 use App\Utils\ModuleUtil;
 use App\Utils\ProductUtil;
-use App\Utils\SendsSms;
+use App\Traits\SendsSms;
 use App\Utils\TransactionUtil;
 use App\Warranty;
 use DB;

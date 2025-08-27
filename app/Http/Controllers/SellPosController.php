@@ -600,7 +600,7 @@ class SellPosController extends Controller
                 // Send SMS notification if customer has mobile number (non-blocking)
                 if (!empty($ci['mobile'])) {
                     try {
-                        $this->sendSaleInvoiceSms($transaction, $business);
+                        $this->sendSaleInvoiceSms($transaction, $business_id);
                     } catch (\Exception $e) {
                         // Log SMS errors but don't stop transaction processing
                         \Log::emergency('SMS error in store method: ' . $e->getMessage());
@@ -3102,26 +3102,34 @@ class SellPosController extends Controller
     /**
      * Send sale invoice SMS to customer
      */
-    private function sendSaleInvoiceSms($transaction, $business)
+    private function sendSaleInvoiceSms($transaction, $business_id)
     {
         try {
-            if (empty($transaction->contact->mobile) || !$this->isSmsConfigured($business->id)) {
-                return;
-            }
-
             // Get previous due (total due - current transaction due)
             $current_due = $transaction->final_total - $transaction->total_paid;
-            $total_due = $transaction->contact->getTotalDue($business->id);
+            $total_due = 0;
             $previous_due = $total_due - $current_due;
 
             // Format the SMS message
-            $message = "Invoice#{$transaction->invoice_no} | " .
-                      "Bill: ৳" . number_format($transaction->final_total, 2) . " | " .
-                      "Prev Due: ৳" . number_format($previous_due, 2) . " | " .
-                      "Outstanding: ৳" . number_format($total_due, 2) . " | " .
-                      "অর্ডারের জন্য আন্তরিক ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
+            // $message = "Invoice#{$transaction->invoice_no} | " .
+            //           "Bill: ৳" . number_format($transaction->final_total, 2) . " | " .
+            //           "Prev Due: ৳" . number_format($previous_due, 2) . " | " .
+            //           "Outstanding: ৳" . number_format($total_due, 2) . " | " .
+            //           "অর্ডারের জন্য আন্তরিক ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
+            $message = "অর্ডারের জন্য আন্তরিক ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
+                
+            // Send SMS using the existing method
+            $business = \App\Business::find($business_id);
+                
+            // Send SMS using the existing method
+            $sms_data = [
+                'sms_settings' => $business->sms_settings,
+                'mobile_number' => $transaction->contact->mobile,
+                'sms_body' => $message
+            ];
 
-            $this->sendSms($transaction->contact->mobile, $message, $business->id);
+            return $this->notificationUtil->sendSms($sms_data);
+            //$this->sendSms($transaction->contact->mobile, $message, $business_id);
         } catch (\Exception $e) {
             // Log error but don't block the transaction
             \Log::error('Sale invoice SMS failed: ' . $e->getMessage());
