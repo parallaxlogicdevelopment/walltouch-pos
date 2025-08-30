@@ -16,6 +16,7 @@ use App\Utils\ModuleUtil;
 use App\Utils\NotificationUtil;
 use App\Utils\TransactionUtil;
 use App\Utils\Util;
+use App\Services\SmsService;
 use App\Traits\SendsSms;
 use DB;
 use Excel;
@@ -36,6 +37,8 @@ class ContactController extends Controller
 
     protected $notificationUtil;
 
+    protected $smsService;
+
     /**
      * Constructor
      *
@@ -47,13 +50,15 @@ class ContactController extends Controller
         ModuleUtil $moduleUtil,
         TransactionUtil $transactionUtil,
         NotificationUtil $notificationUtil,
-        ContactUtil $contactUtil
+        ContactUtil $contactUtil,
+        SmsService $smsService
     ) {
         $this->commonUtil = $commonUtil;
         $this->contactUtil = $contactUtil;
         $this->moduleUtil = $moduleUtil;
         $this->transactionUtil = $transactionUtil;
         $this->notificationUtil = $notificationUtil;
+        $this->smsService = $smsService;
     }
 
     /**
@@ -636,17 +641,13 @@ class ContactController extends Controller
                     $contact_name = $input['name'] ?? '';
                     $contact_type = $input['type'] ?? 'customer';
                     
-                    // Send different SMS messages based on contact type using optimized SMS service
+                    // Send different SMS messages based on contact type
                     if ($contact_type == 'supplier') {
                         // Supplier welcome message
-                        $this->sendSupplierWelcomeSms($contact_name, $input['mobile']);
-                    } elseif ($contact_type == 'customer') {
-                        // Customer welcome message  
-                        $this->sendWelcomeSms($contact_name, $input['mobile']);
-                    } elseif ($contact_type == 'both') {
-                        // Both customer and supplier
-                        $message = "Dear {$contact_name}, আপনি আমাদের সিস্টেমে Customer ও Supplier হিসেবে যুক্ত হয়েছেন। সহযোগিতার জন্য ধন্যবাদ। – WALL TOUCH, Hotline: 01712968571";
-                        $this->sendSms($input['mobile'], $message);
+                        $this->smsService->sendSupplierWelcomeSms($contact_name, $input['mobile'], $business_id);
+                    } elseif ($contact_type == 'customer' || $contact_type == 'both') {
+                        // Customer welcome message using the new format
+                        $this->smsService->sendWelcomeSms($contact_name, $input['mobile'], $business_id);
                     }
                 } catch (\Exception $e) {
                     // Log SMS errors but don't stop contact creation process

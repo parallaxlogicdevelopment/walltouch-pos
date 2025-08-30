@@ -6,6 +6,7 @@ use App\Contact;
 use App\Events\TransactionPaymentAdded;
 use App\Events\TransactionPaymentUpdated;
 use App\Exceptions\AdvanceBalanceNotAvailable;
+use App\Services\SmsService;
 use App\Transaction;
 use App\TransactionPayment;
 use App\Utils\ModuleUtil;
@@ -22,16 +23,19 @@ class TransactionPaymentController extends Controller
 
     protected $moduleUtil;
 
+    protected $smsService;
+
     /**
      * Constructor
      *
      * @param  TransactionUtil  $transactionUtil
      * @return void
      */
-    public function __construct(TransactionUtil $transactionUtil, ModuleUtil $moduleUtil)
+    public function __construct(TransactionUtil $transactionUtil, ModuleUtil $moduleUtil, SmsService $smsService)
     {
         $this->transactionUtil = $transactionUtil;
         $this->moduleUtil = $moduleUtil;
+        $this->smsService = $smsService;
     }
 
     /**
@@ -131,7 +135,10 @@ class TransactionPaymentController extends Controller
                     // Send SMS notification for payment (non-blocking)
                     try {
                         if ($transaction->contact && !empty($transaction->contact->mobile)) {
-                            $this->sendPaymentSms($transaction, $tp);
+                            // Check if this is a supplier payment and send appropriate SMS
+                            if ($transaction->contact->type == 'supplier' || $transaction->contact->type == 'both') {
+                                $this->smsService->sendSupplierPaymentSms($transaction->contact, $tp, $business_id);
+                            }
                         }
                     } catch (\Exception $e) {
                         // Log SMS errors but don't stop payment process
@@ -587,7 +594,10 @@ class TransactionPaymentController extends Controller
                 if ($tp && $tp->payment_for) {
                     $contact = Contact::find($tp->payment_for);
                     if ($contact && !empty($contact->mobile)) {
-                        $this->sendContactPaymentSms($contact, $tp);
+                        // Check if this is a supplier payment and send appropriate SMS
+                        if ($contact->type == 'supplier' || $contact->type == 'both') {
+                            $this->smsService->sendSupplierPaymentSms($contact, $tp, $business_id);
+                        }
                     }
                 }
             } catch (\Exception $e) {

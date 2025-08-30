@@ -18,48 +18,66 @@ class SmsService
         $this->notificationUtil = new NotificationUtil();
     }
 
-    /**
-     * Send a simple SMS message
-     */
-    public function sendSms($mobile, $message, $business_id = null)
+        public function sendSaleInvoiceSms($transaction, $business_id)
     {
         try {
-            if (is_null($business_id)) {
-                $business_id = request()->session()->get('user.business_id');
+            // Load the transaction with contact relationship if not already loaded
+            if (!$transaction->relationLoaded('contact')) {
+                $transaction->load('contact');
             }
 
-            $business = Business::find($business_id);
+            // Get customer's current balance (total due amount)
+            $customer_balance = $transaction->contact->balance ?? 0;
+
+            // Get the latest payment details for this transaction
+            $latest_payment = $transaction->payment_lines()
+                ->where('is_return', 0)
+                ->orderBy('created_at', 'desc')
+                ->first();
+
+            $payment_amount = $latest_payment ? $latest_payment->amount : $transaction->total_paid;
+            $payment_method = $latest_payment ? ucfirst($latest_payment->method) : 'Cash';
+
+            // Format the SMS message according to the new format
+            // Sample: Received: ৳[Amount] via [Cash] | Current Due: ৳[Total Due] – WALL TOUCH, Hotline: 01712968571
+            $message = "Received: ৳" . number_format($payment_amount, 2) .
+                " via " . $payment_method .
+                " | Current Due: ৳" . number_format($customer_balance, 2) .
+                " – WALL TOUCH, Hotline: 01712968571";
+
+            return $this->sendSms($transaction->contact->mobile, $message, $business_id);
+
+        } catch (\Exception $e) {
+            // Log error but don't block the transaction
+            \Log::error('Sale invoice SMS failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Core method to send SMS using NotificationUtil
+     */
+    protected function sendSms($mobile, $message, $business_id = null)
+    {
+        try {
+            // Get business details for SMS settings
+            $business = \App\Business::find($business_id);
             
-            if (!$business || !$this->isSmsConfigured($business_id)) {
-                return [
-                    'success' => false,
-                    'message' => 'SMS not configured for this business',
-                    'data' => null
-                ];
+            if (!$business) {
+                return ['success' => false, 'message' => 'Business not found'];
             }
 
+            // Prepare SMS data for sending
             $sms_data = [
                 'sms_settings' => $business->sms_settings,
                 'mobile_number' => $mobile,
                 'sms_body' => $message
             ];
 
-            $this->notificationUtil->sendSms($sms_data);
-            
-            return [
-                'success' => true,
-                'message' => 'SMS sent successfully',
-                'data' => ['mobile' => $mobile, 'message' => $message]
-            ];
-
+            return $this->notificationUtil->sendSms($sms_data);
         } catch (\Exception $e) {
             \Log::error('SMS Service Error: ' . $e->getMessage());
-            
-            return [
-                'success' => false,
-                'message' => 'Failed to send SMS: ' . $e->getMessage(),
-                'data' => null
-            ];
+            return ['success' => false, 'message' => $e->getMessage()];
         }
     }
 
@@ -68,8 +86,157 @@ class SmsService
      */
     public function sendWelcomeSms($customer_name, $mobile, $business_id = null)
     {
-        $message = "Welcome {$customer_name}! আপনি এখন আমাদের সিস্টেমে যুক্ত হয়েছেন। আন্তরিক ধন্যবাদ আমাদের সাথে থাকার জন্য। – WALL TOUCH, Hotline: 01712968571";
+        $message = "Welcome {$customer_name}! You are Added To Our Customer List – WALL TOUCH, Hotline: 01712968571";
         return $this->sendSms($mobile, $message, $business_id);
+    }
+
+    /**
+     * Send welcome SMS to new supplier
+     */
+    public function sendSupplierWelcomeSms($supplier_name, $mobile, $business_id = null)
+    {
+        $message = "Dear {$supplier_name}, You are Added To Our Vendor List – WALL TOUCH, Hotline: 01712968571";
+        return $this->sendSms($mobile, $message, $business_id);
+    }
+
+    /**
+     * Send new sale SMS notification
+     */
+    public function sendNewSaleSms($transaction, $business_id)
+    {
+        try {
+            // Load the transaction with contact relationship if not already loaded
+            if (!$transaction->relationLoaded('contact')) {
+                $transaction->load('contact');
+            }
+
+            // Calculate previous due amount (balance before this transaction)
+            $current_balance = $transaction->contact->balance ?? 0;
+            $transaction_amount = $transaction->final_total ?? 0;
+            $prev_due = $current_balance - $transaction_amount;
+
+            // Format the SMS message
+            $message = "Invoice#{$transaction->invoice_no} | Bill: ৳" . number_format($transaction_amount, 2) .
+                " | Prev Due: ৳" . number_format($prev_due, 2) .
+                " | Outstanding: ৳" . number_format($current_balance, 2) .
+                " – WALL TOUCH, Hotline: 01712968571";
+
+            return $this->sendSms($transaction->contact->mobile, $message, $business_id);
+
+        } catch (\Exception $e) {
+            \Log::error('New sale SMS failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send sales return SMS notification
+     */
+    public function sendSalesReturnSms($transaction, $business_id)
+    {
+        try {
+            // Load the transaction with contact relationship if not already loaded
+            if (!$transaction->relationLoaded('contact')) {
+                $transaction->load('contact');
+            }
+
+            // Calculate previous due amount (balance before this return)
+            $current_balance = $transaction->contact->balance ?? 0;
+            $return_amount = abs($transaction->final_total ?? 0);
+            $prev_due = $current_balance + $return_amount;
+
+            // Format the SMS message
+            $message = "Return#{$transaction->invoice_no} | Returned: ৳" . number_format($return_amount, 2) .
+                " | Prev Due: ৳" . number_format($prev_due, 2) .
+                " | Outstanding: ৳" . number_format($current_balance, 2) .
+                " – WALL TOUCH, Hotline: 01712968571";
+
+            return $this->sendSms($transaction->contact->mobile, $message, $business_id);
+
+        } catch (\Exception $e) {
+            \Log::error('Sales return SMS failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send supplier payment SMS notification
+     */
+    public function sendSupplierPaymentSms($contact, $payment, $business_id)
+    {
+        try {
+            // Get current balance (total due amount after payment)
+            $current_balance = $contact->balance ?? 0;
+            
+            // Payment amount
+            $payment_amount = $payment->amount ?? 0;
+            $payment_method = ucfirst($payment->method ?? 'Cash');
+            $cheque_number = $payment->cheque_number ?? 'N/A';
+
+            // Format the SMS message
+            $message = "Paid: ৳" . number_format($payment_amount, 2) .
+                " via " . $payment_method .
+                " | Cheque: " . $cheque_number .
+                " | Current Due: ৳" . number_format($current_balance, 2) .
+                " – WALL TOUCH, Hotline: 01712968571";
+
+            return $this->sendSms($contact->mobile, $message, $business_id);
+
+        } catch (\Exception $e) {
+            \Log::error('Supplier payment SMS failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Send shipping update SMS notification
+     */
+    public function sendShippingSms($transaction, $business_id)
+    {
+        try {
+            // Load the transaction with contact relationship if not already loaded
+            if (!$transaction->relationLoaded('contact')) {
+                $transaction->load('contact');
+            }
+
+            // Prepare shipping information for SMS
+            $shipping_info = [];
+            
+            if (!empty($transaction->shipping_details)) {
+                $shipping_info[] = $transaction->shipping_details;
+            }
+            
+            if (!empty($transaction->shipping_address)) {
+                $shipping_info[] = $transaction->shipping_address;
+            }
+            
+            if (!empty($transaction->shipping_status)) {
+                $shipping_info[] = "Status: " . ucfirst($transaction->shipping_status);
+            }
+            
+            if (!empty($transaction->delivered_to)) {
+                $shipping_info[] = "Delivered to: " . $transaction->delivered_to;
+            }
+
+            // Add custom shipping fields if they exist
+            for ($i = 1; $i <= 5; $i++) {
+                $field = "shipping_custom_field_{$i}";
+                if (!empty($transaction->$field)) {
+                    $shipping_info[] = $transaction->$field;
+                }
+            }
+
+            $shipping_details = !empty($shipping_info) ? implode(' | ', $shipping_info) : 'Updated';
+
+            // Format the SMS message as requested
+            $message = "Your Product has been Sent. Shipping Details: {$shipping_details} | – WALL TOUCH, Hotline: 01712968571";
+
+            return $this->sendSms($transaction->contact->mobile, $message, $business_id);
+
+        } catch (\Exception $e) {
+            \Log::error('Shipping SMS failed: ' . $e->getMessage());
+            return false;
+        }
     }
 
     /**

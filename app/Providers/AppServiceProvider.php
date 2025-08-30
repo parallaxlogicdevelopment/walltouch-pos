@@ -34,14 +34,14 @@ class AppServiceProvider extends ServiceProvider
             error_reporting(0);
 	}
 
-        \URL::forceScheme('https');
+        //\URL::forceScheme('https');
 
         //force https
         $url = parse_url(config('app.url'));
 
-        if ($url['scheme'] == 'https') {
-            \URL::forceScheme('https');
-        }
+        // if ($url['scheme'] == 'https') {
+        //     \URL::forceScheme('https');
+        // }
 
         if (request()->has('lang')) {
             \App::setLocale(request()->get('lang'));

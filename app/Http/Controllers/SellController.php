@@ -11,6 +11,7 @@ use App\InvoiceScheme;
 use App\Media;
 use App\Product;
 use App\SellingPriceGroup;
+use App\Services\SmsService;
 use App\TaxRate;
 use App\Transaction;
 use App\TransactionSellLine;
@@ -44,19 +45,22 @@ class SellController extends Controller
 
     protected $productUtil;
 
+    protected $smsService;
+
     /**
      * Constructor
      *
      * @param  ProductUtils  $product
      * @return void
      */
-    public function __construct(ContactUtil $contactUtil, BusinessUtil $businessUtil, TransactionUtil $transactionUtil, ModuleUtil $moduleUtil, ProductUtil $productUtil)
+    public function __construct(ContactUtil $contactUtil, BusinessUtil $businessUtil, TransactionUtil $transactionUtil, ModuleUtil $moduleUtil, ProductUtil $productUtil, SmsService $smsService)
     {
         $this->contactUtil = $contactUtil;
         $this->businessUtil = $businessUtil;
         $this->transactionUtil = $transactionUtil;
         $this->moduleUtil = $moduleUtil;
         $this->productUtil = $productUtil;
+        $this->smsService = $smsService;
 
         $this->dummyPaymentLine = ['method' => '', 'amount' => 0, 'note' => '', 'card_transaction_number' => '', 'card_number' => '', 'card_type' => '', 'card_holder_name' => '', 'card_month' => '', 'card_year' => '', 'card_security' => '', 'cheque_number' => '', 'bank_account_number' => '',
             'is_return' => 0, 'transaction_no' => '', ];
@@ -1580,8 +1584,12 @@ class SellController extends Controller
             $this->transactionUtil->activityLog($transaction, 'shipping_edited', $transaction_before, $activity_property);
 
             // Send shipping SMS notification (non-blocking)
-            $business = Business::find($business_id);
-            $this->sendShippingSms($transaction, $business);
+            try {
+                $this->smsService->sendShippingSms($transaction, $business_id);
+            } catch (\Exception $e) {
+                // Log SMS errors but don't stop shipping update process
+                \Log::emergency('SMS error in shipping update: ' . $e->getMessage());
+            }
 
             $output = ['success' => 1,
                 'msg' => trans('lang_v1.updated_success'),
@@ -1668,49 +1676,4 @@ class SellController extends Controller
     /**
      * Send shipping SMS to customer
      */
-    private function sendShippingSms($transaction, $business)
-    {
-        try {
-            if (empty($transaction->contact->mobile) || !$this->isSmsConfigured($business->id)) {
-                return;
-            }
-
-            // Prepare shipping information for SMS
-            $shipping_info = [];
-            
-            if (!empty($transaction->shipping_details)) {
-                $shipping_info[] = $transaction->shipping_details;
-            }
-            
-            if (!empty($transaction->shipping_address)) {
-                $shipping_info[] = $transaction->shipping_address;
-            }
-            
-            if (!empty($transaction->shipping_status)) {
-                $shipping_info[] = "Status: " . $transaction->shipping_status;
-            }
-            
-            if (!empty($transaction->delivered_to)) {
-                $shipping_info[] = "Delivered to: " . $transaction->delivered_to;
-            }
-
-            // Add custom shipping fields if they exist
-            for ($i = 1; $i <= 5; $i++) {
-                $field = "shipping_custom_field_{$i}";
-                if (!empty($transaction->$field)) {
-                    $shipping_info[] = $transaction->$field;
-                }
-            }
-
-            $shipping_details = !empty($shipping_info) ? implode(' | ', $shipping_info) : 'Updated';
-
-            // Format the SMS message as requested
-            $message = "আপনার পণ্য পাঠানো হয়েছে। Shipping Details: {$shipping_details} | – WALL TOUCH, Hotline: 01712968571";
-
-            $this->sendSms($transaction->contact->mobile, $message, $business->id);
-        } catch (\Exception $e) {
-            // Log error but don't block the shipping update
-            \Log::error('Shipping SMS failed: ' . $e->getMessage());
-        }
-    }
 }

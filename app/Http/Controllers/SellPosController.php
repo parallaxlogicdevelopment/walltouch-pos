@@ -39,6 +39,7 @@ use App\InvoiceScheme;
 use App\Media;
 use App\Product;
 use App\SellingPriceGroup;
+use App\Services\SmsService;
 use App\TaxRate;
 use App\Transaction;
 use App\TransactionPayment;
@@ -86,6 +87,8 @@ class SellPosController extends Controller
 
     protected $notificationUtil;
 
+    protected $smsService;
+
     /**
      * Constructor
      *
@@ -99,7 +102,8 @@ class SellPosController extends Controller
         TransactionUtil $transactionUtil,
         CashRegisterUtil $cashRegisterUtil,
         ModuleUtil $moduleUtil,
-        NotificationUtil $notificationUtil
+        NotificationUtil $notificationUtil,
+        SmsService $smsService
     ) {
         $this->contactUtil = $contactUtil;
         $this->productUtil = $productUtil;
@@ -108,6 +112,7 @@ class SellPosController extends Controller
         $this->cashRegisterUtil = $cashRegisterUtil;
         $this->moduleUtil = $moduleUtil;
         $this->notificationUtil = $notificationUtil;
+        $this->smsService = $smsService;
 
         $this->dummyPaymentLine = ['method' => 'cash', 'amount' => 0, 'note' => '', 'card_transaction_number' => '', 'card_number' => '', 'card_type' => '', 'card_holder_name' => '', 'card_month' => '', 'card_year' => '', 'card_security' => '', 'cheque_number' => '', 'bank_account_number' => '',
             'is_return' => 0, 'transaction_no' => '', ];
@@ -598,13 +603,11 @@ class SellPosController extends Controller
                 DB::commit();
 
                 // Send SMS notification if customer has mobile number (non-blocking)
-                if (!empty($ci['mobile'])) {
-                    try {
-                        $this->sendSaleInvoiceSms($transaction, $business_id);
-                    } catch (\Exception $e) {
-                        // Log SMS errors but don't stop transaction processing
-                        \Log::emergency('SMS error in store method: ' . $e->getMessage());
-                    }
+                try {
+                    $this->smsService->sendSaleInvoiceSms($transaction, $business_id);
+                } catch (\Exception $e) {
+                    // Log SMS errors but don't stop transaction processing
+                    \Log::emergency('SMS error in store method: ' . $e->getMessage());
                 }
 
                 SellCreatedOrModified::dispatch($transaction);
@@ -3102,37 +3105,48 @@ class SellPosController extends Controller
     /**
      * Send sale invoice SMS to customer
      */
-    private function sendSaleInvoiceSms($transaction, $business_id)
-    {
-        try {
-            // Get previous due (total due - current transaction due)
-            $current_due = $transaction->final_total - $transaction->total_paid;
-            $total_due = 0;
-            $previous_due = $total_due - $current_due;
-
-            // Format the SMS message
-            // $message = "Invoice#{$transaction->invoice_no} | " .
-            //           "Bill: ৳" . number_format($transaction->final_total, 2) . " | " .
-            //           "Prev Due: ৳" . number_format($previous_due, 2) . " | " .
-            //           "Outstanding: ৳" . number_format($total_due, 2) . " | " .
-            //           "অর্ডারের জন্য আন্তরিক ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
-            $message = "অর্ডারের জন্য আন্তরিক ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
+    // private function sendSaleInvoiceSms($transaction, $business_id)
+    // {
+    //     // try {
+    //         // Load the transaction with contact relationship if not already loaded
+    //         if (!$transaction->relationLoaded('contact')) {
+    //             $transaction->load('contact');
+    //         }
+            
+    //         // Get customer's current balance (total due amount)
+    //         $customer_balance = $transaction->contact->balance ?? 0;
+            
+    //         // Get the latest payment details for this transaction
+    //         $latest_payment = $transaction->payment_lines()
+    //             ->where('is_return', 0)
+    //             ->orderBy('created_at', 'desc')
+    //             ->first();
+            
+    //         $payment_amount = $latest_payment ? $latest_payment->amount : $transaction->total_paid;
+    //         $payment_method = $latest_payment ? ucfirst($latest_payment->method) : 'Cash';
+            
+    //         // Format the SMS message according to the new format
+    //         // Sample: Received: ৳[Amount] via [Cash] | Current Due: ৳[Total Due] – WALL TOUCH, Hotline: 01712968571
+    //         $message = "Received: ৳" . number_format($payment_amount, 2) . 
+    //                   " via " . $payment_method . 
+    //                   " | Current Due: ৳" . number_format($customer_balance, 2) . 
+    //                   " – WALL TOUCH, Hotline: 01712968571";
                 
-            // Send SMS using the existing method
-            $business = \App\Business::find($business_id);
+    //         // Get business details for SMS settings
+    //         $business = \App\Business::find($business_id);
                 
-            // Send SMS using the existing method
-            $sms_data = [
-                'sms_settings' => $business->sms_settings,
-                'mobile_number' => $transaction->contact->mobile,
-                'sms_body' => $message
-            ];
+    //         // Prepare SMS data for sending
+    //         $sms_data = [
+    //             'sms_settings' => $business->sms_settings,
+    //             'mobile_number' => $transaction->contact->mobile,
+    //             'sms_body' => $message
+    //         ];
 
-            return $this->notificationUtil->sendSms($sms_data);
-            //$this->sendSms($transaction->contact->mobile, $message, $business_id);
-        } catch (\Exception $e) {
-            // Log error but don't block the transaction
-            \Log::error('Sale invoice SMS failed: ' . $e->getMessage());
-        }
-    }
+    //         return $this->notificationUtil->sendSms($sms_data);
+    //     // } catch (\Exception $e) {
+    //     //     // Log error but don't block the transaction
+    //     //     \Log::error('Sale invoice SMS failed: ' . $e->getMessage());
+    //     //     return false;
+    //     // }
+    // }
 }

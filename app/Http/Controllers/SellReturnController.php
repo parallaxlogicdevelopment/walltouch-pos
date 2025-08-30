@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\BusinessLocation;
 use App\Contact;
 use App\Events\TransactionPaymentDeleted;
+use App\Services\SmsService;
 use App\Transaction;
 use App\TransactionSellLine;
 use App\User;
@@ -36,19 +37,22 @@ class SellReturnController extends Controller
 
     protected $moduleUtil;
 
+    protected $smsService;
+
     /**
      * Constructor
      *
      * @param  ProductUtils  $product
      * @return void
      */
-    public function __construct(ProductUtil $productUtil, TransactionUtil $transactionUtil, ContactUtil $contactUtil, BusinessUtil $businessUtil, ModuleUtil $moduleUtil)
+    public function __construct(ProductUtil $productUtil, TransactionUtil $transactionUtil, ContactUtil $contactUtil, BusinessUtil $businessUtil, ModuleUtil $moduleUtil, SmsService $smsService)
     {
         $this->productUtil = $productUtil;
         $this->transactionUtil = $transactionUtil;
         $this->contactUtil = $contactUtil;
         $this->businessUtil = $businessUtil;
         $this->moduleUtil = $moduleUtil;
+        $this->smsService = $smsService;
     }
 
     /**
@@ -294,8 +298,12 @@ class SellReturnController extends Controller
                 DB::commit();
 
                 // Send SMS notification for sales return (non-blocking)
-                $business = \App\Business::find($business_id);
-                $this->sendSalesReturnSms($sell_return, $business);
+                try {
+                    $this->smsService->sendSalesReturnSms($sell_return, $business_id);
+                } catch (\Exception $e) {
+                    // Log SMS errors but don't stop transaction processing
+                    \Log::emergency('SMS error in sales return: ' . $e->getMessage());
+                }
 
                 $output = ['success' => 1,
                     'msg' => __('lang_v1.success'),
@@ -597,38 +605,5 @@ class SellReturnController extends Controller
         return ['success' => 1,
             'redirect_url' => action([\App\Http\Controllers\SellReturnController::class, 'add'], [$sell->id]),
         ];
-    }
-
-    /**
-     * Send sales return SMS to customer
-     */
-    private function sendSalesReturnSms($sell_return, $business)
-    {
-        try {
-            // Load the parent sale transaction and contact
-            $sell_return->load(['contact', 'return_parent']);
-            
-            if (empty($sell_return->contact->mobile) || !$this->isSmsConfigured($business->id)) {
-                return;
-            }
-
-            // Get customer's total due amount
-            $total_due = $sell_return->contact->getTotalDue($business->id);
-            
-            // Calculate previous due (before this return)
-            $previous_due = $total_due + $sell_return->final_total;
-
-            // Format the SMS message as requested
-            $message = "Return#{$sell_return->invoice_no} | " .
-                      "Returned: ৳" . number_format($sell_return->final_total, 2) . " | " .
-                      "Prev Due: ৳" . number_format($previous_due, 2) . " | " .
-                      "Outstanding: ৳" . number_format($total_due, 2) . " | " .
-                      "প্রোডাক্ট ফেরতের জন্য ধন্যবাদ – WALL TOUCH, Hotline: 01712968571";
-
-            $this->sendSms($sell_return->contact->mobile, $message, $business->id);
-        } catch (\Exception $e) {
-            // Log error but don't block the transaction
-            \Log::error('Sales return SMS failed: ' . $e->getMessage());
-        }
     }
 }
